@@ -52,6 +52,12 @@ class TransportParams(BaseModel):
         audio_in_filter: Audio filter to apply to input audio.
         audio_in_stream_on_start: Start audio streaming immediately on transport start.
         audio_in_passthrough: Pass through input audio frames downstream.
+        audio_in_gap_fill_enabled: Synthesize silence frames while the input
+            audio stream gaps (e.g. telephony silence suppression/DTX stops
+            RTP during caller silence). Downstream consumers — local VADs and
+            server-side turn detection (e.g. OpenAI Realtime server VAD) —
+            need a continuous stream to detect end-of-speech; without fill a
+            gapped stream leaves the user turn open forever.
         video_in_enabled: Enable video input streaming.
         video_out_enabled: Enable video output streaming.
         video_out_is_live: Enable real-time video output streaming.
@@ -91,6 +97,7 @@ class TransportParams(BaseModel):
     audio_in_filter: BaseAudioFilter | None = None
     audio_in_stream_on_start: bool = True
     audio_in_passthrough: bool = True
+    audio_in_gap_fill_enabled: bool = False
     video_in_enabled: bool = False
     video_out_enabled: bool = False
     video_out_is_live: bool = False

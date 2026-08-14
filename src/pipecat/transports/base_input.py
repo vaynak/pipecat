@@ -32,6 +32,12 @@ from pipecat.utils.deprecation import deprecated
 
 AUDIO_INPUT_TIMEOUT_SECS = 0.5
 
+# Gap-fill cadence: how long the audio queue may sit empty before synthesized
+# silence is pushed, and the duration of each synthesized silence frame. Kept
+# well under typical server-VAD silence windows (~500ms) so end-of-speech is
+# detected promptly after real audio stops.
+AUDIO_INPUT_GAP_FILL_TIMEOUT_SECS = 0.1
+
 
 class BaseInputTransport(FrameProcessor):
     """Base class for input transport implementations.
@@ -269,10 +275,15 @@ class BaseInputTransport(FrameProcessor):
         # Skip timeout handling until the first audio frame arrives (e.g. client
         # not yet connected).
         audio_received = False
+        timeout = (
+            AUDIO_INPUT_GAP_FILL_TIMEOUT_SECS
+            if self._params.audio_in_gap_fill_enabled
+            else AUDIO_INPUT_TIMEOUT_SECS
+        )
         while True:
             try:
                 frame: InputAudioRawFrame = await asyncio.wait_for(
-                    self._audio_in_queue.get(), timeout=AUDIO_INPUT_TIMEOUT_SECS
+                    self._audio_in_queue.get(), timeout=timeout
                 )
 
                 # From now on, timeout should warn if there's no audio.
@@ -295,3 +306,28 @@ class BaseInputTransport(FrameProcessor):
             except TimeoutError:
                 if not audio_received:
                     continue
+                if self._params.audio_in_gap_fill_enabled:
+                    await self._push_gap_fill_silence(timeout)
+
+    async def _push_gap_fill_silence(self, duration_secs: float):
+        """Push synthesized silence covering an input stream gap.
+
+        Telephony sources with silence suppression (DTX) stop delivering
+        frames while the caller is quiet. Local VADs and server-side turn
+        detection (e.g. OpenAI Realtime server VAD) only detect end-of-speech
+        from silence *in the stream*, so a stalled stream leaves the user turn
+        open forever and the model never responds. Filling gaps restores the
+        continuous-stream contract that continuous transports (WebRTC,
+        Twilio-style media streams) provide natively.
+        """
+        if not self._params.audio_in_passthrough:
+            return
+        num_samples = int(self._sample_rate * duration_secs)
+        if num_samples <= 0:
+            return
+        frame = InputAudioRawFrame(
+            audio=bytes(num_samples * 2 * self._params.audio_in_channels),
+            sample_rate=self._sample_rate,
+            num_channels=self._params.audio_in_channels,
+        )
+        await self.push_frame(frame)
